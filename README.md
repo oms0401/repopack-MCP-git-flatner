@@ -297,12 +297,132 @@ Create `test.py`:
 
 ```python
 import asyncio
-import sys
+import httpx
+import os
 
-# Add your imports here based on the test script from earlier
-# Run the flatten function directly
+# Copy the helper functions from your main file
+CODE_EXTENSIONS = {
+    '.py', '.js', '.ts', '.jsx', '.tsx', '.java', '.cpp', '.c', '.h', '.hpp',
+    '.cs', '.go', '.rs', '.rb', '.php', '.swift', '.kt', '.scala', '.r',
+    '.m', '.mm', '.sh', '.bash', '.zsh', '.sql', '.html', '.css', '.scss',
+    '.sass', '.less', '.vue', '.svelte', '.json', '.yaml', '.yml', '.toml',
+    '.xml', '.md', '.txt', '.gitignore', '.env.example', 'Makefile', 'Dockerfile'
+}
 
-asyncio.run(test())
+EXCLUDE_PATTERNS = {
+    'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml',
+    '.min.js', '.min.css', 'bundle.js'
+}
+
+async def fetch_repo_tree(owner: str, repo: str, token: str = None):
+    url = f"https://api.github.com/repos/{owner}/{repo}/git/trees/main?recursive=1"
+    headers = {"Accept": "application/vnd.github.v3+json"}
+    if token:
+        headers["Authorization"] = f"token {token}"
+    
+    async with httpx.AsyncClient() as client:
+        response = await client.get(url, headers=headers, timeout=30.0)
+        if response.status_code == 404:
+            url = f"https://api.github.com/repos/{owner}/{repo}/git/trees/master?recursive=1"
+            response = await client.get(url, headers=headers, timeout=30.0)
+        
+        response.raise_for_status()
+        data = response.json()
+        return data.get("tree", [])
+
+async def fetch_file_content(owner: str, repo: str, path: str, token: str = None):
+    url = f"https://raw.githubusercontent.com/{owner}/{repo}/main/{path}"
+    headers = {}
+    if token:
+        headers["Authorization"] = f"token {token}"
+    
+    async with httpx.AsyncClient() as client:
+        response = await client.get(url, headers=headers, timeout=30.0)
+        if response.status_code == 404:
+            url = f"https://raw.githubusercontent.com/{owner}/{repo}/master/{path}"
+            response = await client.get(url, headers=headers, timeout=30.0)
+        
+        if response.status_code == 200:
+            try:
+                return response.text
+            except:
+                return f"[Binary file: {path}]"
+        return ""
+
+def should_include_file(path: str):
+    for pattern in EXCLUDE_PATTERNS:
+        if pattern in path:
+            return False
+    
+    ignore_dirs = ['node_modules/', '.git/', 'dist/', 'build/', '__pycache__/', 
+                   'venv/', 'env/', '.next/', '.nuxt/', 'coverage/']
+    if any(ignore_dir in path for ignore_dir in ignore_dirs):
+        return False
+    
+    _, ext = os.path.splitext(path)
+    filename = os.path.basename(path)
+    return ext.lower() in CODE_EXTENSIONS or filename in CODE_EXTENSIONS
+
+async def test_flatten(repo_url: str, max_files: int = 20):
+    """Test the flattening logic directly"""
+    repo_url = repo_url.strip().rstrip('/')
+    if "github.com/" in repo_url:
+        parts = repo_url.split("github.com/")[1].split("/")
+        owner, repo = parts[0], parts[1]
+    else:
+        parts = repo_url.split("/")
+        owner, repo = parts[0], parts[1]
+    
+    print(f"Fetching repo: {owner}/{repo}")
+    
+    tree = await fetch_repo_tree(owner, repo)
+    print(f"Total items in tree: {len(tree)}")
+    
+    files_to_fetch = [
+        item for item in tree 
+        if item["type"] == "blob" and should_include_file(item["path"])
+    ][:max_files]
+    
+    print(f"Files to fetch: {len(files_to_fetch)}")
+    
+    output_lines = [
+        f"# Flattened Repository: {owner}/{repo}",
+        f"# Total files included: {len(files_to_fetch)}",
+        "=" * 80,
+        ""
+    ]
+    
+    for item in files_to_fetch:
+        path = item["path"]
+        print(f"Fetching: {path}")
+        content = await fetch_file_content(owner, repo, path)
+        
+        if content:
+            output_lines.extend([
+                "",
+                f"{'=' * 80}",
+                f"# FILE: {path}",
+                f"{'=' * 80}",
+                content,
+                ""
+            ])
+    
+    result = "\n".join(output_lines)
+    return result
+
+async def main():
+    result = await test_flatten(
+        repo_url="https://github.com/fastmcp/fastmcp",
+        max_files=10
+    )
+    print("\n" + "="*80)
+    print("RESULT (first 2000 chars):")
+    print("="*80)
+    print(result[:2000])
+    print(f"\n... (Total length: {len(result)} characters)")
+
+if __name__ == "__main__":
+    asyncio.run(main())
 ```
 
 Run:
@@ -426,5 +546,6 @@ Upcoming features:
 ---
 
 **⭐ If RepoStack helped you, give it a star on GitHub!**
+
 
 Made with ❤️ by Om Manoj Sharma for the  developer community
